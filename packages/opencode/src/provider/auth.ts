@@ -1,10 +1,12 @@
 import type { AuthOAuthResult, Hooks } from "@kilocode/plugin"
+import { Config } from "@/config"
 import { NamedError } from "@opencode-ai/shared/util/error"
 import { Auth } from "@/auth"
 import { InstanceState } from "@/effect"
 import { zod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
 import { Plugin } from "../plugin"
+import { aliasMap } from "./alias"
 import { ProviderID } from "./schema"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
 import z from "zod"
@@ -119,22 +121,30 @@ interface State {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ProviderAuth") {}
 
-export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | Config.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
     const plugin = yield* Plugin.Service
+    const config = yield* Config.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
         const plugins = yield* plugin.list()
-        return {
-          hooks: Record.fromEntries(
-            Arr.filterMap(plugins, (x) =>
-              x.auth?.provider !== undefined
-                ? Result.succeed([ProviderID.make(x.auth.provider), x.auth] as const)
-                : Result.failVoid,
-            ),
+        const aliases = aliasMap((yield* config.get()).provider ?? {})
+        const hooks = Record.fromEntries(
+          Arr.filterMap(plugins, (x) =>
+            x.auth?.provider !== undefined
+              ? Result.succeed([ProviderID.make(x.auth.provider), x.auth] as const)
+              : Result.failVoid,
           ),
+        )
+        for (const [id, root] of Object.entries(aliases)) {
+          const hook = hooks[ProviderID.make(root)]
+          if (!hook) continue
+          hooks[ProviderID.make(id)] = hook
+        }
+        return {
+          hooks,
           pending: new Map<ProviderID, AuthOAuthResult>(),
         }
       }),
@@ -247,5 +257,5 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
 )
 
 export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Plugin.defaultLayer)),
+  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Plugin.defaultLayer), Layer.provide(Config.defaultLayer)),
 )

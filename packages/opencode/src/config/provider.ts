@@ -73,6 +73,7 @@ export const Model = Schema.Struct({
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 
 export class Info extends Schema.Class<Info>("ProviderConfig")({
+  extends: Schema.optional(Schema.String),
   api: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   env: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),

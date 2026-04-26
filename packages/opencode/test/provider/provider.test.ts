@@ -10,6 +10,7 @@ import { Plugin } from "../../src/plugin/index"
 import { ModelsDev } from "../../src/provider"
 import { Provider } from "../../src/provider"
 import { ProviderID, ModelID } from "../../src/provider/schema"
+import { Auth } from "../../src/auth"
 import { Env } from "../../src/env"
 import { Effect } from "effect"
 import { AppRuntime } from "../../src/effect/app-runtime"
@@ -111,6 +112,95 @@ test("provider loaded from config with apiKey option", async () => {
     fn: async () => {
       const providers = await list()
       expect(providers[ProviderID.anthropic]).toBeDefined()
+    },
+  })
+})
+
+test("provider alias clones openai models and keeps alias overrides isolated", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://app.kilo.ai/config.json",
+          provider: {
+            "openai-account1": {
+              extends: "openai",
+              name: "OpenAI account1",
+              options: {
+                timeout: 1234,
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    init: async () => {
+      set("OPENAI_API_KEY", "test-openai-key")
+    },
+    fn: async () => {
+      const providers = await list()
+      const alias = providers[ProviderID.make("openai-account1")]
+      expect(alias).toBeDefined()
+      expect(alias.extends).toBe(ProviderID.openai)
+      expect(alias.name).toBe("OpenAI account1")
+      expect(alias.options.timeout).toBe(1234)
+
+      const model = alias.models["gpt-5"]
+      expect(model).toBeDefined()
+      expect(model.providerID).toBe(ProviderID.make("openai-account1"))
+      expect(model.extends).toBe(ProviderID.openai)
+      expect(model.api.npm).toBe("@ai-sdk/openai")
+      expect(providers[ProviderID.openai]).toBeDefined()
+      expect(providers[ProviderID.openai].options.timeout).not.toBe(1234)
+    },
+  })
+})
+
+test("openai alias reuses oauth auth loader", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://app.kilo.ai/config.json",
+          provider: {
+            "openai-account1": {
+              extends: "openai",
+              name: "OpenAI account1",
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    init: async () => {
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const auth = yield* Auth.Service
+          yield* auth.set("openai-account1", {
+            type: "oauth",
+            refresh: "refresh",
+            access: "access",
+            expires: Date.now() + 60_000,
+          })
+        }),
+      )
+    },
+    fn: async () => {
+      const providers = await list()
+      const alias = providers[ProviderID.make("openai-account1")]
+      expect(alias).toBeDefined()
+      expect(Object.keys(alias.models).length).toBeGreaterThan(0)
+      expect(Object.values(alias.models).every((item) => item.cost.input === 0)).toBe(true)
+      expect(Object.values(alias.models).every((item) => item.providerID === ProviderID.make("openai-account1"))).toBe(
+        true,
+      )
     },
   })
 })

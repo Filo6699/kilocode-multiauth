@@ -4,7 +4,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { ModelsDev } from "../../provider"
-import { map, pipe, sortBy, values } from "remeda"
+import { filter, map, pipe, sortBy, values } from "remeda"
 import path from "path"
 import os from "os"
 import { Config } from "../../config"
@@ -15,6 +15,7 @@ import type { Hooks } from "@kilocode/plugin"
 import { Process } from "../../util"
 import { text } from "node:stream/consumers"
 import { Effect } from "effect"
+import { aliasMap, normalizeOpenAIAlias } from "../../provider/alias"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
 
@@ -181,6 +182,37 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
   }
 
   return false
+}
+
+async function ensureOpenAIAlias(input: {
+  provider: string
+  config: Config.Info
+  prompt: () => Promise<string | symbol>
+}) {
+  if (input.provider !== "openai") return
+  const value = await input.prompt()
+  if (prompts.isCancel(value)) throw new UI.CancelledError()
+  const alias = normalizeOpenAIAlias(value)
+  if ("error" in alias) {
+    prompts.log.error(alias.error)
+    process.exit(1)
+  }
+
+  const existing = input.config.provider?.[alias.id]
+  await AppRuntime.runPromise(
+    Config.Service.use((cfg) =>
+      cfg.updateGlobal({
+        provider: {
+          [alias.id]: {
+            extends: "openai",
+            name: existing?.name ?? alias.name,
+          },
+        },
+      }),
+    ),
+  )
+
+  return alias.id
 }
 
 export function resolvePluginProviders(input: {
@@ -350,6 +382,7 @@ export const ProvidersLoginCommand = cmd({
           }
           return filtered
         })
+        const aliases = aliasMap(config.provider ?? {})
         const hooks = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const plugin = yield* Plugin.Service
@@ -372,7 +405,7 @@ export const ProvidersLoginCommand = cmd({
 
         const pluginProviders = resolvePluginProviders({
           hooks,
-          existingProviders: providers,
+          existingProviders: { ...providers, ...(config.provider ?? {}) },
           disabled,
           enabled,
           providerNames: Object.fromEntries(Object.entries(config.provider ?? {}).map(([id, p]) => [id, p.name])),
@@ -393,6 +426,17 @@ export const ProvidersLoginCommand = cmd({
                 opencode: "recommended",
                 openai: "ChatGPT Plus/Pro or API key",
               }[x.id],
+            })),
+          ),
+          ...pipe(
+            Object.entries(config.provider ?? {}),
+            map(([id, item]) => [id, item] as const),
+            filter(([id]) => !providers[id]),
+            sortBy(([id, item]) => item.name ?? id),
+            map(([id, item]) => ({
+              label: item.name ?? id,
+              value: id,
+              hint: aliases[id] ? `alias for ${aliases[id]}` : undefined,
             })),
           ),
           ...pluginProviders.map((x) => ({
@@ -429,7 +473,23 @@ export const ProvidersLoginCommand = cmd({
           provider = selected as string
         }
 
-        const plugin = hooks.findLast((x) => x.auth?.provider === provider)
+        const openai = await ensureOpenAIAlias({
+          provider,
+          config,
+          prompt: () =>
+            prompts.text({
+              message: "OpenAI account alias",
+              placeholder: "account1",
+              validate: (x) => normalizeOpenAIAlias(x ?? "").error ?? undefined,
+            }),
+        })
+        if (openai) {
+          provider = openai
+          aliases[provider] = "openai"
+        }
+
+        const root = aliases[provider] ?? config.provider?.[provider]?.extends ?? provider
+        const plugin = hooks.findLast((x) => x.auth?.provider === root)
         if (plugin && plugin.auth) {
           const handled = await handlePluginAuth({ auth: plugin.auth }, provider, args.method)
           if (handled) return

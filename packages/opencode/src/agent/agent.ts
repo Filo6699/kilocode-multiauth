@@ -372,7 +372,7 @@ export const layer = Layer.effect(
 
         // TODO: clean this up so provider specific logic doesnt bleed over
         const authInfo = yield* auth.get(model.providerID).pipe(Effect.orDie)
-        const isOpenaiOauth = model.providerID === "openai" && authInfo?.type === "oauth"
+        const isOpenaiOauth = (resolved.providerID === "openai" || resolved.extends === "openai") && authInfo?.type === "oauth"
 
         const params = {
           // kilocode_change start - enable telemetry with custom PostHog tracer
