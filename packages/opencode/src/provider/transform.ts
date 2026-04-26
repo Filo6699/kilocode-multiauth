@@ -8,6 +8,7 @@ import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
 import { kiloProviderOptions } from "@/kilocode/provider-options"
 import { isLing } from "@/kilocode/model-match" // kilocode_change
+import { isModelFamily } from "./alias"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -840,7 +841,7 @@ export function options(input: {
 
   // openai and providers using openai package should set store to false by default.
   if (
-    input.model.providerID === "openai" ||
+    isModelFamily(input.model, "openai") ||
     input.model.api.npm === "@ai-sdk/openai" ||
     input.model.api.npm === "@ai-sdk/github-copilot"
   ) {
@@ -882,7 +883,7 @@ export function options(input: {
     }
   }
 
-  if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
+  if (isModelFamily(input.model, "openai") || input.providerOptions?.setCacheKey) {
     result["promptCacheKey"] = input.sessionID
   }
 
@@ -974,7 +975,7 @@ export function options(input: {
 
 export function smallOptions(model: Provider.Model) {
   if (
-    model.providerID === "openai" ||
+    isModelFamily(model, "openai") ||
     model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/github-copilot"
   ) {

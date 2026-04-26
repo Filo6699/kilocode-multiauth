@@ -61,6 +61,37 @@ describe("plugin.auth-override", () => {
     expect(copilot[0].label).toBe("Test Override Auth")
     expect(plainMethods[ProviderID.make("github-copilot")][0].label).not.toBe("Test Override Auth")
   }, 30000) // Increased timeout for plugin installation
+
+  test("openai alias exposes openai auth methods", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://app.kilo.ai/config.json",
+            provider: {
+              "openai-account1": {
+                extends: "openai",
+                name: "OpenAI account1",
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    const methods = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        return Effect.runPromise(
+          ProviderAuth.Service.use((svc) => svc.methods()).pipe(Effect.provide(ProviderAuth.defaultLayer)),
+        )
+      },
+    })
+
+    expect(methods[ProviderID.make("openai-account1")]).toBeDefined()
+    expect(methods[ProviderID.make("openai-account1")]).toEqual(methods[ProviderID.openai])
+  })
 })
 
 const file = path.join(import.meta.dir, "../../src/plugin/index.ts")

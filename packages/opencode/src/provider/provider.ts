@@ -28,6 +28,7 @@ import { isRecord } from "@/util/record"
 import { withStatics } from "@/util/schema"
 
 import * as ProviderTransform from "./transform"
+import { aliasMap } from "./alias"
 import { ModelID, ProviderID } from "./schema"
 // kilocode_change start
 import {
@@ -879,6 +880,7 @@ const ProviderLimit = Schema.Struct({
 export const Model = Schema.Struct({
   id: ModelID,
   providerID: ProviderID,
+  extends: Schema.optional(ProviderID),
   api: ProviderApiInfo,
   name: Schema.String,
   family: Schema.optional(Schema.String),
@@ -898,6 +900,7 @@ export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 
 export const Info = Schema.Struct({
   id: ProviderID,
+  extends: Schema.optional(ProviderID),
   name: Schema.String,
   source: Schema.Literals(["env", "config", "custom", "api"]),
   env: Schema.Array(Schema.String),
@@ -1059,6 +1062,23 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
+function cloneAlias(provider: Info, providerID: ProviderID, root: ProviderID): Info {
+  const next = structuredClone(provider)
+  next.id = providerID
+  next.extends = root
+  next.models = Object.fromEntries(
+    Object.entries(next.models).map(([id, model]) => [
+      id,
+      {
+        ...model,
+        providerID,
+        extends: root,
+      },
+    ]),
+  )
+  return next
+}
+
 const layer: Layer.Layer<
   Service,
   never,
@@ -1079,6 +1099,7 @@ const layer: Layer.Layer<
         const cfg = yield* config.get()
         const modelsDev = yield* Effect.promise(() => ModelsDev.get())
         const database = mapValues(modelsDev, fromModelsDevProvider)
+        const aliases = aliasMap(cfg.provider ?? {})
 
         const providers: Record<ProviderID, Info> = {} as Record<ProviderID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1100,6 +1121,12 @@ const layer: Layer.Layer<
         }
 
         log.info("init")
+
+        for (const [id, root] of Object.entries(aliases)) {
+          const base = database[root]
+          if (!base) continue
+          database[id] = cloneAlias(base, ProviderID.make(id), ProviderID.make(root))
+        }
 
         function mergeProvider(providerID: ProviderID, provider: Partial<Info>) {
           const existing = providers[providerID]
@@ -1133,6 +1160,7 @@ const layer: Layer.Layer<
           const existing = database[providerID]
           const parsed: Info = {
             id: ProviderID.make(providerID),
+            extends: existing?.extends,
             name: provider.name ?? existing?.name ?? providerID,
             env: provider.env ?? existing?.env ?? [],
             options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
@@ -1163,6 +1191,7 @@ const layer: Layer.Layer<
               status: model.status ?? existingModel?.status ?? "active",
               name,
               providerID: ProviderID.make(providerID),
+              extends: existingModel?.extends,
               capabilities: {
                 temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
                 reasoning: model.reasoning ?? existingModel?.capabilities.reasoning ?? false,
@@ -1246,45 +1275,53 @@ const layer: Layer.Layer<
         // plugin auth loader - database now has entries for config providers
         for (const plugin of plugins) {
           if (!plugin.auth) continue
-          const providerID = ProviderID.make(plugin.auth.provider)
-          if (disabled.has(providerID)) continue
-
-          const stored = yield* auth.get(providerID).pipe(Effect.orDie)
-          if (!stored) continue
           if (!plugin.auth.loader) continue
 
-          const options = yield* Effect.promise(() =>
-            plugin.auth!.loader!(
-              () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              database[plugin.auth!.provider],
-            ),
-          )
-          const opts = options ?? {}
-          const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
-          mergeProvider(providerID, patch)
+          for (const id of [plugin.auth.provider, ...Object.keys(aliases).filter((item) => aliases[item] === plugin.auth!.provider)]) {
+            const providerID = ProviderID.make(id)
+            if (disabled.has(providerID)) continue
+
+            const stored = yield* auth.get(providerID).pipe(Effect.orDie)
+            if (!stored) continue
+
+            const options = yield* Effect.promise(() =>
+              plugin.auth!.loader!(
+                () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
+                database[id],
+              ),
+            )
+            const opts = options ?? {}
+            const patch: Partial<Info> = providers[providerID]
+              ? { options: opts }
+              : { source: "custom", options: opts }
+            mergeProvider(providerID, patch)
+          }
         }
 
         // kilocode_change start - resolve env once for patchCustomLoaderResult (azure env fallback)
         const kiloEnv = yield* env.all()
         // kilocode_change end
-        for (const [id, fn] of Object.entries({ ...custom(dep), ...kiloCustomLoaders(dep) })) {
-          // kilocode_change
-          const providerID = ProviderID.make(id)
-          if (disabled.has(providerID)) continue
-          const data = database[providerID]
-          if (!data) {
-            log.error("Provider does not exist in model list " + providerID)
-            continue
-          }
-          const result = yield* fn(data)
-          if (result) patchCustomLoaderResult(id, result, kiloEnv) // kilocode_change
-          if (result && (result.autoload || providers[providerID])) {
-            if (result.getModel) modelLoaders[providerID] = result.getModel
-            if (result.vars) varsLoaders[providerID] = result.vars
-            if (result.discoverModels) discoveryLoaders[providerID] = result.discoverModels
-            const opts = result.options ?? {}
-            const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
-            mergeProvider(providerID, patch)
+        for (const [root, fn] of Object.entries({ ...custom(dep), ...kiloCustomLoaders(dep) })) {
+          for (const id of [root, ...Object.keys(aliases).filter((item) => aliases[item] === root)]) {
+            const providerID = ProviderID.make(id)
+            if (disabled.has(providerID)) continue
+            const data = database[providerID]
+            if (!data) {
+              log.error("Provider does not exist in model list " + providerID)
+              continue
+            }
+            const result = yield* fn(data)
+            if (result) patchCustomLoaderResult(id, result, kiloEnv) // kilocode_change
+            if (result && (result.autoload || providers[providerID])) {
+              if (result.getModel) modelLoaders[providerID] = result.getModel
+              if (result.vars) varsLoaders[providerID] = result.vars
+              if (result.discoverModels) discoveryLoaders[providerID] = result.discoverModels
+              const opts = result.options ?? {}
+              const patch: Partial<Info> = providers[providerID]
+                ? { options: opts }
+                : { source: "custom", options: opts }
+              mergeProvider(providerID, patch)
+            }
           }
         }
 
@@ -1292,6 +1329,7 @@ const layer: Layer.Layer<
         for (const [id, provider] of configProviders) {
           const providerID = ProviderID.make(id)
           const partial: Partial<Info> = { source: "config" }
+          if (provider.extends) partial.extends = ProviderID.make(aliases[id] ?? provider.extends)
           if (provider.env) partial.env = provider.env
           if (provider.name) partial.name = provider.name
           if (provider.options) partial.options = provider.options

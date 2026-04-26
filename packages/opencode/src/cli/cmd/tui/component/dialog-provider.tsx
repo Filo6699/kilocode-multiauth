@@ -15,6 +15,7 @@ import * as Clipboard from "@tui/util/clipboard"
 import { useToast } from "../ui/toast"
 import { isConsoleManagedProvider } from "@tui/util/provider-origin"
 import * as KiloProvider from "@/kilocode/cli/cmd/tui/component/dialog-provider" // kilocode_change
+import { normalizeOpenAIAlias } from "@/provider/alias"
 
 const PROVIDER_PRIORITY: Record<string, number> = KiloProvider.PROVIDER_PRIORITY // kilocode_change
 
@@ -41,8 +42,45 @@ export function createDialogProviderOptions() {
           gutter: connected ? <text fg={theme.success}>✓</text> : undefined,
           async onSelect() {
             if (consoleManaged) return
+            const providerID = await (async () => {
+              if (provider.id !== "openai") return provider.id
 
-            const methods = sync.data.provider_auth[provider.id] ?? [
+              while (true) {
+                const value = await DialogPrompt.show(dialog, "OpenAI account alias", {
+                  placeholder: "account1",
+                  description: () => <text fg={theme.textMuted}>Lowercase letters, digits, and hyphens only.</text>,
+                })
+                if (!value) return null
+                const alias = normalizeOpenAIAlias(value ?? "")
+                if ("error" in alias) {
+                  toast.show({ variant: "error", message: alias.error ?? "Invalid alias" })
+                  continue
+                }
+
+                const current = await sdk.client.global.config.get()
+                const existing = current.data?.provider?.[alias.id]
+                const result = await sdk.client.global.config.update(
+                  {
+                    config: {
+                      provider: {
+                        [alias.id]: {
+                          // kilocode_change
+                          extends: "openai",
+                          name: existing?.name ?? alias.name,
+                        } as any,
+                      },
+                    },
+                  },
+                  { throwOnError: true },
+                )
+                await sdk.client.instance.dispose()
+                await sync.bootstrap()
+                return alias.id
+              }
+            })()
+            if (!providerID) return
+
+            const methods = sync.data.provider_auth[providerID] ?? [
               {
                 type: "api",
                 label: "API key",
@@ -80,7 +118,7 @@ export function createDialogProviderOptions() {
               }
 
               const result = await sdk.client.provider.oauth.authorize({
-                providerID: provider.id,
+                providerID,
                 method: index,
                 inputs,
               })
@@ -95,7 +133,7 @@ export function createDialogProviderOptions() {
               if (result.data?.method === "code") {
                 dialog.replace(() => (
                   <CodeMethod
-                    providerID={provider.id}
+                    providerID={providerID}
                     title={method.label}
                     index={index}
                     authorization={result.data!}
@@ -105,7 +143,7 @@ export function createDialogProviderOptions() {
               if (result.data?.method === "auto") {
                 // kilocode_change start
                 const kilo = KiloProvider.renderAutoMethod({
-                  providerID: provider.id,
+                  providerID,
                   title: method.label,
                   index,
                   authorization: result.data!,
@@ -119,7 +157,7 @@ export function createDialogProviderOptions() {
                   // kilocode_change end
                   dialog.replace(() => (
                     <AutoMethod
-                      providerID={provider.id}
+                      providerID={providerID}
                       title={method.label}
                       index={index}
                       authorization={result.data!}
@@ -136,7 +174,7 @@ export function createDialogProviderOptions() {
                 metadata = value
               }
               return dialog.replace(() => (
-                <ApiMethod providerID={provider.id} title={method.label} metadata={metadata} />
+                <ApiMethod providerID={providerID} title={method.label} metadata={metadata} />
               ))
             }
           },
