@@ -192,9 +192,10 @@ async function ensureOpenAIAlias(input: {
   if (input.provider !== "openai") return
   const value = await input.prompt()
   if (prompts.isCancel(value)) throw new UI.CancelledError()
+  if (typeof value !== "string") return
   const alias = normalizeOpenAIAlias(value)
   if ("error" in alias) {
-    prompts.log.error(alias.error)
+    prompts.log.error(alias.error ?? "Invalid alias")
     process.exit(1)
   }
 
@@ -428,17 +429,14 @@ export const ProvidersLoginCommand = cmd({
               }[x.id],
             })),
           ),
-          ...pipe(
-            Object.entries(config.provider ?? {}),
-            map(([id, item]) => [id, item] as const),
-            filter(([id]) => !providers[id]),
-            sortBy(([id, item]) => item.name ?? id),
-            map(([id, item]) => ({
+          ...Object.entries(config.provider ?? {})
+            .filter(([id]) => !providers[id])
+            .sort(([a, x], [b, y]) => (x.name ?? a).localeCompare(y.name ?? b))
+            .map(([id, item]) => ({
               label: item.name ?? id,
               value: id,
               hint: aliases[id] ? `alias for ${aliases[id]}` : undefined,
             })),
-          ),
           ...pluginProviders.map((x) => ({
             label: x.name,
             value: x.id,

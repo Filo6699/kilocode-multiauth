@@ -51,9 +51,9 @@ export function createDialogProviderOptions() {
                   description: () => <text fg={theme.textMuted}>Lowercase letters, digits, and hyphens only.</text>,
                 })
                 if (!value) return null
-                const alias = normalizeOpenAIAlias(value)
+                const alias = normalizeOpenAIAlias(value ?? "")
                 if ("error" in alias) {
-                  toast.show({ variant: "error", message: alias.error })
+                  toast.show({ variant: "error", message: alias.error ?? "Invalid alias" })
                   continue
                 }
 
@@ -64,18 +64,15 @@ export function createDialogProviderOptions() {
                     config: {
                       provider: {
                         [alias.id]: {
+                          // kilocode_change
                           extends: "openai",
                           name: existing?.name ?? alias.name,
-                        },
+                        } as any,
                       },
                     },
                   },
                   { throwOnError: true },
                 )
-                if (result.error) {
-                  toast.show({ variant: "error", message: JSON.stringify(result.error) })
-                  return null
-                }
                 await sdk.client.instance.dispose()
                 await sync.bootstrap()
                 return alias.id
