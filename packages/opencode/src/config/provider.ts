@@ -111,9 +111,8 @@ export class Info extends Schema.Class<Info>("ProviderConfig")({
     ),
   ),
   models: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Model))), // kilocode_change - allow null values so removed models can be deleted via stripNulls on save
-})
-  .annotate({ identifier: "ProviderConfig" })
-  .pipe(withStatics((s) => ({ zod: zod(s) })))
-export type Info = Schema.Schema.Type<typeof Info>
+}) {
+  static readonly zod = zod(this)
+}
 
 export * as ConfigProvider from "./provider"

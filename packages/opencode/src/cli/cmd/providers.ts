@@ -432,7 +432,10 @@ export const ProvidersLoginCommand = cmd({
             })),
           ),
           ...Object.entries(config.provider ?? {})
-            .filter(([id]) => !providers[id])
+            .flatMap(([id, item]) => {
+              if (providers[id] || !item) return []
+              return [[id, item] as const]
+            })
             .sort(([a, x], [b, y]) => (x.name ?? a).localeCompare(y.name ?? b))
             .map(([id, item]) => ({
               label: item.name ?? id,

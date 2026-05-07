@@ -1,5 +1,5 @@
 // kilocode_change - new file
-export function aliasMap<T extends { extends?: string }>(providers: Record<string, T | undefined>) {
+export function aliasMap<T extends { extends?: string }>(providers: Record<string, T | null | undefined>) {
   const result: Record<string, string> = {}
 
   const visit = (id: string, seen: Set<string>): string | undefined => {

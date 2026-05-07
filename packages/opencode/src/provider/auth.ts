@@ -1,5 +1,5 @@
 import type { AuthOAuthResult, Hooks } from "@kilocode/plugin"
-import { Config } from "@/config"
+import { Config } from "@/config/config"
 import { Auth } from "@/auth"
 import { InstanceState } from "@/effect/instance-state"
 import { zod } from "@/util/effect-zod"
