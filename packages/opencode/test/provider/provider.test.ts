@@ -193,9 +193,9 @@ test("provider alias clones openai models and keeps alias overrides isolated", a
   })
   await Instance.provide({
     directory: tmp.path,
-    init: async () => {
+    init: Effect.promise(async () => {
       set("OPENAI_API_KEY", "test-openai-key")
-    },
+    }).pipe(Effect.asVoid),
     fn: async () => {
       const providers = await list()
       const alias = providers[ProviderID.make("openai-account1")]
@@ -234,7 +234,7 @@ test("openai alias reuses oauth auth loader", async () => {
   })
   await Instance.provide({
     directory: tmp.path,
-    init: async () => {
+    init: Effect.promise(async () => {
       await AppRuntime.runPromise(
         Effect.gen(function* () {
           const auth = yield* Auth.Service
@@ -246,7 +246,7 @@ test("openai alias reuses oauth auth loader", async () => {
           })
         }),
       )
-    },
+    }).pipe(Effect.asVoid),
     fn: async () => {
       const providers = await list()
       const alias = providers[ProviderID.make("openai-account1")]
