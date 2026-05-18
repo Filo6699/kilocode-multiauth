@@ -93,6 +93,10 @@ export type QuestionOption = {
    * Optional i18n key for the description
    */
   descriptionKey?: string
+  /**
+   * Optional agent/mode name to pre-select in the UI when this option is picked
+   */
+  mode?: string
 }
 
 export type QuestionInfo = {
@@ -264,6 +268,7 @@ export type SessionNetworkWait = {
   restored: boolean
   time: {
     created: number
+    restored?: number
   }
 }
 
@@ -293,6 +298,7 @@ export type EventSessionNetworkRestored = {
   properties: {
     sessionID: string
     requestID: string
+    time: number
   }
 }
 
@@ -629,6 +635,38 @@ export type EventKiloSessionsRemoteStatusChanged = {
   }
 }
 
+export type EventWorkspaceReady = {
+  type: "workspace.ready"
+  properties: {
+    name: string
+  }
+}
+
+export type EventWorkspaceFailed = {
+  type: "workspace.failed"
+  properties: {
+    message: string
+  }
+}
+
+export type EventWorkspaceRestore = {
+  type: "workspace.restore"
+  properties: {
+    workspaceID: string
+    sessionID: string
+    total: number
+    step: number
+  }
+}
+
+export type EventWorkspaceStatus = {
+  type: "workspace.status"
+  properties: {
+    workspaceID: string
+    status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
 export type EventWorktreeReady = {
   type: "worktree.ready"
   properties: {
@@ -680,38 +718,6 @@ export type EventPtyDeleted = {
   type: "pty.deleted"
   properties: {
     id: string
-  }
-}
-
-export type EventWorkspaceReady = {
-  type: "workspace.ready"
-  properties: {
-    name: string
-  }
-}
-
-export type EventWorkspaceFailed = {
-  type: "workspace.failed"
-  properties: {
-    message: string
-  }
-}
-
-export type EventWorkspaceRestore = {
-  type: "workspace.restore"
-  properties: {
-    workspaceID: string
-    sessionID: string
-    total: number
-    step: number
-  }
-}
-
-export type EventWorkspaceStatus = {
-  type: "workspace.status"
-  properties: {
-    workspaceID: string
-    status: "connected" | "connecting" | "disconnected" | "error"
   }
 }
 
@@ -1360,16 +1366,16 @@ export type GlobalEvent = {
     | EventKilocodeAgentManagerStart
     | EventVcsBranchUpdated
     | EventKiloSessionsRemoteStatusChanged
+    | EventWorkspaceReady
+    | EventWorkspaceFailed
+    | EventWorkspaceRestore
+    | EventWorkspaceStatus
     | EventWorktreeReady
     | EventWorktreeFailed
     | EventPtyCreated
     | EventPtyUpdated
     | EventPtyExited
     | EventPtyDeleted
-    | EventWorkspaceReady
-    | EventWorkspaceFailed
-    | EventWorkspaceRestore
-    | EventWorkspaceStatus
     | EventMessageUpdated
     | EventMessageRemoved
     | EventMessagePartUpdated
@@ -1430,6 +1436,7 @@ export type IndexingConfig = {
    * Embedding provider to use for codebase indexing
    */
   provider?:
+    | "kilo"
     | "openai"
     | "ollama"
     | "openai-compatible"
@@ -1451,6 +1458,14 @@ export type IndexingConfig = {
    * Vector store backend (default: qdrant)
    */
   vectorStore?: "lancedb" | "qdrant"
+  /**
+   * Kilo-hosted embedding provider options
+   */
+  kilo?: {
+    apiKey?: string
+    baseUrl?: string
+    organizationId?: string
+  }
   /**
    * OpenAI embedding provider options
    */
@@ -2036,6 +2051,10 @@ export type Config = {
      */
     auto?: boolean
     /**
+     * Percentage of the model input/context window that triggers automatic compaction. The reserved safety buffer still applies if it would compact sooner.
+     */
+    threshold_percent?: number | null
+    /**
      * Enable pruning of old tool outputs (default: true)
      */
     prune?: boolean
@@ -2506,16 +2525,16 @@ export type Event =
   | EventKilocodeAgentManagerStart
   | EventVcsBranchUpdated
   | EventKiloSessionsRemoteStatusChanged
+  | EventWorkspaceReady
+  | EventWorkspaceFailed
+  | EventWorkspaceRestore
+  | EventWorkspaceStatus
   | EventWorktreeReady
   | EventWorktreeFailed
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
-  | EventWorkspaceReady
-  | EventWorkspaceFailed
-  | EventWorkspaceRestore
-  | EventWorkspaceStatus
   | EventMessageUpdated
   | EventMessageRemoved
   | EventMessagePartUpdated
@@ -2891,19 +2910,19 @@ export type AppLogResponses = {
 
 export type AppLogResponse = AppLogResponses[keyof AppLogResponses]
 
-export type ExperimentalWorkspaceAdaptorListData = {
+export type ExperimentalWorkspaceAdapterListData = {
   body?: never
   path?: never
   query?: {
     directory?: string
     workspace?: string
   }
-  url: "/experimental/workspace/adaptor"
+  url: "/experimental/workspace/adapter"
 }
 
-export type ExperimentalWorkspaceAdaptorListResponses = {
+export type ExperimentalWorkspaceAdapterListResponses = {
   /**
-   * Workspace adaptors
+   * Workspace adapters
    */
   200: Array<{
     type: string
@@ -2912,8 +2931,8 @@ export type ExperimentalWorkspaceAdaptorListResponses = {
   }>
 }
 
-export type ExperimentalWorkspaceAdaptorListResponse =
-  ExperimentalWorkspaceAdaptorListResponses[keyof ExperimentalWorkspaceAdaptorListResponses]
+export type ExperimentalWorkspaceAdapterListResponse =
+  ExperimentalWorkspaceAdapterListResponses[keyof ExperimentalWorkspaceAdapterListResponses]
 
 export type ExperimentalWorkspaceListData = {
   body?: never
@@ -5119,6 +5138,7 @@ export type ProviderListResponses = {
       [key: string]: string
     }
     connected: Array<string>
+    failed: Array<string>
   }
 }
 
@@ -6334,6 +6354,25 @@ export type NetworkRejectResponses = {
 
 export type NetworkRejectResponse = NetworkRejectResponses[keyof NetworkRejectResponses]
 
+export type IndexingStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/indexing/status"
+}
+
+export type IndexingStatusResponses = {
+  /**
+   * Indexing status
+   */
+  200: IndexingStatus
+}
+
+export type IndexingStatusResponse = IndexingStatusResponses[keyof IndexingStatusResponses]
+
 export type SuggestionListData = {
   body?: never
   path?: never
@@ -7209,6 +7248,46 @@ export type KiloFimResponses = {
 }
 
 export type KiloFimResponse = KiloFimResponses[keyof KiloFimResponses]
+
+export type KiloAudioTranscriptionsData = {
+  body?: {
+    model: string
+    input_audio: {
+      data: string
+      format: string
+    }
+    language?: string
+    prompt?: string
+    temperature?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/kilo/audio/transcriptions"
+}
+
+export type KiloAudioTranscriptionsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type KiloAudioTranscriptionsError = KiloAudioTranscriptionsErrors[keyof KiloAudioTranscriptionsErrors]
+
+export type KiloAudioTranscriptionsResponses = {
+  /**
+   * Transcription response
+   */
+  200: {
+    text: string
+    usage?: unknown
+  }
+}
+
+export type KiloAudioTranscriptionsResponse = KiloAudioTranscriptionsResponses[keyof KiloAudioTranscriptionsResponses]
 
 export type KiloNotificationsData = {
   body?: never

@@ -25,7 +25,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { isRecord } from "@/util/record"
-import { withStatics } from "@/util/schema"
+import { optionalOmitUndefined, withStatics } from "@/util/schema"
 
 import * as ProviderTransform from "./transform"
 import { aliasMap } from "./alias"
@@ -215,11 +215,37 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       }),
     azure: Effect.fnUntraced(function* (provider: Info) {
       const env = yield* dep.env()
-      const resource = iife(() => {
-        const name = provider.options?.resourceName
-        if (typeof name === "string" && name.trim() !== "") return name
-        return env["AZURE_RESOURCE_NAME"]
+      const auth = yield* dep.auth(provider.id)
+      // kilocode_change start - prefer explicit Azure endpoint over resource name to avoid conflicting SDK options
+      const endpoint = iife(() => {
+        return [
+          provider.options?.baseURL,
+          auth?.type === "api" ? auth.metadata?.baseURL : undefined,
+          env["AZURE_OPENAI_ENDPOINT"],
+        ].find((url) => typeof url === "string" && url.trim() !== "")
       })
+      const resource = endpoint
+        ? undefined
+        : iife(() => {
+            return [
+              provider.options?.resourceName,
+              auth?.type === "api" ? auth.metadata?.resourceName : undefined,
+              env["AZURE_RESOURCE_NAME"],
+              env["AZURE_OPENAI_RESOURCE_NAME"],
+            ].find((name) => typeof name === "string" && name.trim() !== "")
+          })
+      // kilocode_change end
+
+      if (!resource && !endpoint) { // kilocode_change
+        return {
+          autoload: false,
+          async getModel() {
+            throw new Error(
+              "Azure resource name or endpoint is missing. Set AZURE_RESOURCE_NAME, AZURE_OPENAI_RESOURCE_NAME, AZURE_OPENAI_ENDPOINT, or reconnect the azure provider.", // kilocode_change
+            )
+          },
+        }
+      }
 
       return {
         autoload: false,
@@ -231,11 +257,16 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
             return sdk.responses(modelID)
           }
         },
-        options: {},
-        vars(_options) {
-          return {
-            ...(resource && { AZURE_RESOURCE_NAME: resource }),
+        options: {
+          ...(endpoint ? { baseURL: endpoint } : { resourceName: resource }), // kilocode_change
+        },
+        vars(_options): Record<string, string> {
+          if (resource) {
+            return {
+              AZURE_RESOURCE_NAME: resource,
+            }
           }
+          return {}
         },
       }
     }),
@@ -410,9 +441,9 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-            "X-Source": "opencode",
+            "HTTP-Referer": "https://kilo.ai/", // kilocode_change
+            "X-Title": "Kilo Code", // kilocode_change
+            "X-Source": "kilo", // kilocode_change
           },
         },
       }),
@@ -421,8 +452,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
+            "HTTP-Referer": "https://kilo.ai/", // kilocode_change
+            "X-Title": "Kilo Code", // kilocode_change
           },
         },
       }),
@@ -431,8 +462,9 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
+            "HTTP-Referer": "https://kilo.ai/", // kilocode_change
+            "X-Title": "Kilo Code", // kilocode_change
+            "X-BILLING-INVOKE-ORIGIN": "KiloCode", // kilocode_change
           },
         },
       }),
@@ -441,8 +473,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "http-referer": "https://opencode.ai/",
-            "x-title": "opencode",
+            "http-referer": "https://kilo.ai/", // kilocode_change
+            "x-title": "Kilo Code", // kilocode_change
           },
         },
       }),
@@ -539,8 +571,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
+            "HTTP-Referer": "https://kilo.ai/", // kilocode_change
+            "X-Title": "Kilo Code", // kilocode_change
           },
         },
       }),
@@ -815,7 +847,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "X-Cerebras-3rd-Party-Integration": "opencode",
+            "X-Cerebras-3rd-Party-Integration": "Kilo Code", // kilocode_change
           },
         },
       }),
@@ -824,8 +856,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
+            "HTTP-Referer": "https://kilo.ai/", // kilocode_change
+            "X-Title": "Kilo Code", // kilocode_change
           },
         },
       }),
@@ -872,7 +904,7 @@ const ProviderCost = Schema.Struct({
   input: Schema.Finite,
   output: Schema.Finite,
   cache: ProviderCacheCost,
-  experimentalOver200K: Schema.optional(
+  experimentalOver200K: optionalOmitUndefined(
     Schema.Struct({
       input: Schema.Finite,
       output: Schema.Finite,
@@ -883,7 +915,7 @@ const ProviderCost = Schema.Struct({
 
 const ProviderLimit = Schema.Struct({
   context: Schema.Finite,
-  input: Schema.optional(Schema.Finite),
+  input: optionalOmitUndefined(Schema.Finite),
   output: Schema.Finite,
 })
 
@@ -893,7 +925,7 @@ export const Model = Schema.Struct({
   extends: Schema.optional(ProviderID),
   api: ProviderApiInfo,
   name: Schema.String,
-  family: Schema.optional(Schema.String),
+  family: optionalOmitUndefined(Schema.String),
   capabilities: ProviderCapabilities,
   cost: ProviderCost,
   limit: ProviderLimit,
@@ -901,7 +933,7 @@ export const Model = Schema.Struct({
   options: Schema.Record(Schema.String, Schema.Any),
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
-  variants: Schema.optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
+  variants: optionalOmitUndefined(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
   ...KILO_MODEL_SCHEMA_EXTENSIONS, // kilocode_change
 })
   .annotate({ identifier: "Model" })
@@ -914,7 +946,7 @@ export const Info = Schema.Struct({
   name: Schema.String,
   source: Schema.Literals(["env", "config", "custom", "api"]),
   env: Schema.Array(Schema.String),
-  key: Schema.optional(Schema.String),
+  key: optionalOmitUndefined(Schema.String),
   options: Schema.Record(Schema.String, Schema.Any),
   models: Schema.Record(Schema.String, Model),
 })
@@ -928,6 +960,7 @@ export const ListResult = Schema.Struct({
   all: Schema.Array(Info),
   default: DefaultModelIDs,
   connected: Schema.Array(Schema.String),
+  failed: Schema.Array(Schema.String), // kilocode_change
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ListResult = Types.DeepMutable<Schema.Schema.Type<typeof ListResult>>
 
@@ -1092,7 +1125,7 @@ function cloneAlias(provider: Info, providerID: ProviderID, root: ProviderID): I
 const layer: Layer.Layer<
   Service,
   never,
-  Config.Service | Auth.Service | Plugin.Service | AppFileSystem.Service | Env.Service
+  Config.Service | Auth.Service | Plugin.Service | AppFileSystem.Service | Env.Service | ModelsDev.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1101,13 +1134,14 @@ const layer: Layer.Layer<
     const auth = yield* Auth.Service
     const env = yield* Env.Service
     const plugin = yield* Plugin.Service
+    const modelsDevSvc = yield* ModelsDev.Service
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
-        const modelsDev = yield* Effect.promise(() => ModelsDev.get())
+        const modelsDev = yield* modelsDevSvc.get()
         const database = mapValues(modelsDev, fromModelsDevProvider)
         const aliases = aliasMap(cfg.provider ?? {})
 
@@ -1163,6 +1197,33 @@ const layer: Layer.Layer<
           if (enabled && !enabled.has(providerID)) return false
           if (disabled.has(providerID)) return false
           return true
+        }
+
+        for (const hook of plugins) {
+          const p = hook.provider
+          const models = p?.models
+          if (!p || !models) continue
+
+          const providerID = ProviderID.make(p.id)
+          if (disabled.has(providerID)) continue
+
+          const provider = database[providerID]
+          if (!provider) continue
+          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+
+          provider.models = yield* Effect.promise(async () => {
+            const next = await models(provider, { auth: pluginAuth })
+            return Object.fromEntries(
+              Object.entries(next).map(([id, model]) => [
+                id,
+                {
+                  ...model,
+                  id: ModelID.make(id),
+                  providerID,
+                },
+              ]),
+            )
+          })
         }
 
         // extend database from config
@@ -1381,33 +1442,6 @@ const layer: Layer.Layer<
             } catch (e) {
               log.warn("state discovery error", { id: "gitlab", error: e })
             }
-          })
-        }
-
-        for (const hook of plugins) {
-          const p = hook.provider
-          const models = p?.models
-          if (!p || !models) continue
-
-          const providerID = ProviderID.make(p.id)
-          if (disabled.has(providerID)) continue
-
-          const provider = providers[providerID]
-          if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
-
-          provider.models = yield* Effect.promise(async () => {
-            const next = await models(provider, { auth: pluginAuth })
-            return Object.fromEntries(
-              Object.entries(next).map(([id, model]) => [
-                id,
-                {
-                  ...model,
-                  id: ModelID.make(id),
-                  providerID,
-                },
-              ]),
-            )
           })
         }
 
@@ -1800,6 +1834,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(Auth.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
+    Layer.provide(ModelsDev.defaultLayer),
   ),
 )
 

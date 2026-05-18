@@ -38,7 +38,7 @@ interface KiloRoutesDeps extends ImportDeps {
   Auth: Auth
   ModelCache: ModelCache
   z: Z
-  Instance: ImportDeps["Instance"] & { disposeAll(): Promise<void> }
+  InstanceStore: { disposeAllInstances(): Promise<void> }
 }
 
 const FIM_TIMEOUT_MS = 30_000
@@ -85,6 +85,7 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
     SessionCreatedEvent,
     Identifier,
     ModelCache,
+    InstanceStore,
   } = deps
 
   const Organization = z.object({
@@ -130,6 +131,21 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
       .optional(),
     cost: z.number().optional(),
   })
+
+  const TranscriptionResponse = z.object({
+    text: z.string(),
+    usage: z.unknown().optional(),
+  })
+
+  const getProxyAuth = async () => {
+    const auth = await Auth.get("kilo")
+    const token = auth?.type === "api" ? auth.key : auth?.type === "oauth" ? auth.access : undefined
+    return {
+      auth,
+      token,
+      organizationId: auth?.type === "oauth" ? auth.accountId : undefined,
+    }
+  }
 
   return new Hono()
     .get(
@@ -216,7 +232,7 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
 
         ModelCache.clear("kilo")
         clearModesCache()
-        await Instance.disposeAll()
+        await InstanceStore.disposeAllInstances()
 
         return c.json(true)
       },
@@ -323,18 +339,15 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
         }),
       ),
       async (c: any) => {
-        const auth = await Auth.get("kilo")
+        const proxy = await getProxyAuth()
 
-        if (!auth) {
+        if (!proxy.auth) {
           return c.json({ error: "Not authenticated with Kilo Gateway" }, 401)
         }
 
-        const token = auth.type === "api" ? auth.key : auth.type === "oauth" ? auth.access : undefined
-        if (!token) {
+        if (!proxy.token) {
           return c.json({ error: "No valid token found" }, 401)
         }
-
-        const organizationId = auth.type === "oauth" ? auth.accountId : undefined
 
         const { prefix, suffix, model, maxTokens, temperature } = c.req.valid("json")
         const fimModel = model ?? "mistralai/codestral-2501"
@@ -346,8 +359,8 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
 
         const headers = {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          ...buildKiloHeaders(undefined, { kilocodeOrganizationId: organizationId }),
+          Authorization: `Bearer ${proxy.token}`,
+          ...buildKiloHeaders(undefined, { kilocodeOrganizationId: proxy.organizationId }),
           [HEADER_FEATURE]: "autocomplete",
         }
 
@@ -385,6 +398,67 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             Connection: "keep-alive",
+          },
+        })
+      },
+    )
+    .post(
+      "/audio/transcriptions",
+      describeRoute({
+        summary: "Speech to text transcription",
+        description: "Proxy an audio transcription request to the Kilo Gateway",
+        operationId: "kilo.audio.transcriptions",
+        responses: {
+          200: {
+            description: "Transcription response",
+            content: {
+              "application/json": {
+                schema: resolver(TranscriptionResponse),
+              },
+            },
+          },
+          ...errors(400, 401),
+        },
+      }),
+      validator(
+        "json",
+        z.object({
+          model: z.string(),
+          input_audio: z.object({
+            data: z.string(),
+            format: z.string(),
+          }),
+          language: z.string().optional(),
+          prompt: z.string().optional(),
+          temperature: z.number().optional(),
+        }),
+      ),
+      async (c: any) => {
+        const proxy = await getProxyAuth()
+        if (!proxy.auth) return c.json({ error: "Not authenticated with Kilo Gateway" }, 401)
+
+        if (!proxy.token) return c.json({ error: "No valid token found" }, 401)
+
+        const body = c.req.valid("json")
+        const headers = {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${proxy.token}`,
+          ...buildKiloHeaders(undefined, { kilocodeOrganizationId: proxy.organizationId }),
+          [HEADER_FEATURE]: "vscode-extension",
+        }
+
+        const response = await fetch(`${KILO_API_BASE}/api/gateway/v1/audio/transcriptions`, {
+          method: "POST",
+          headers,
+          signal: c.req.raw.signal,
+          body: JSON.stringify(body),
+        })
+
+        const text = await response.text()
+        return new Response(text, {
+          status: response.status,
+          headers: {
+            "Content-Type": response.headers.get("Content-Type") ?? "application/json",
           },
         })
       },
